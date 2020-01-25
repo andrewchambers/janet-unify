@@ -13,13 +13,13 @@ Quick Example, A code simplifier engine
 
 (defn simplify-form
   [f]
-  (var f f)
-  (each [p r] simplifications
-    (set f
+  (reduce
+    (fn [f [p r]]
       (if-let [subst (unify p f)]
         (apply-subst subst r)
-        f)))
-    f)
+        f))
+    f
+    simplifications))
 
 (defn fix-point
   [f v1]
