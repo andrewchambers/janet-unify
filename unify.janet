@@ -5,8 +5,6 @@
   [v]
   (and (symbol? v) (string/has-prefix? "?" v)))
 
-(defn- has [ds k] (not (nil? (in ds k))))
-
 (var unify2 nil)
 
 (defn- occurs-check
@@ -14,23 +12,27 @@
   (cond
     (= v term)
       true
-    (and (uvar? term) (has subst term))
-      (occurs-check v (subst term) subst)
-    (or (tuple? term) (struct? term) (table? term) (array? term))
-      (loop [k :keys term]
-        (occurs-check v (term k) subst))
+    (and (uvar? term) (in subst term))
+      (occurs-check v (first (get subst term)) subst)
+    (or (tuple? term) (array? term))
+      (some |(occurs-check v $ subst) term)
+    (or (table? term) (struct? term))
+      (do
+        (defn check1 [x] (occurs-check v x subst))
+        (defn check2 [[x y]] (or (check1 x) (check1 y)))
+        (some check2 (pairs term)))
     false))
 
 (defn- unify-var
   [v x subst]
   (cond
-    (has subst v)
-      (unify2 (get subst v) x subst)
-    (and (uvar? x) (has subst v))
-      (unify2 v (subst v))
+    (in subst v)
+      (unify2 (first (get subst v)) x subst)
+    (and (uvar? x) (in subst v))
+      (unify2 v (first (get subst v)))
     (occurs-check v x subst)
       nil
-    (table/to-struct (merge subst {v x}))))
+    (table/to-struct (merge subst {v [x]}))))
 
 (varfn unify2
   [x y subst]
@@ -45,17 +47,48 @@
     (uvar? y)
       (unify-var y x subst)
     (or (and (tuple? x)  (tuple? y))
-        (and (struct? x) (struct? y))
-        (and (table? x)  (table? y))
         (and (array? x)  (array? y)))
       (when (= (length x) (length y))
-        (do
-          (loop [k :keys x :when subst]
-            (set subst (unify2 (x k) (y k) subst)))
-          subst))
+        (loop [k :keys x :when subst]
+          (set subst (unify2 (x k) (y k) subst)))
+        subst)
+    (or (and (table? x) (table? y))
+        (and (struct? x) (struct? y)))
+      (do
+        (def ix (invert x))
+        (def iy (invert y))
+        (defn unify-keys [a b ib]
+          (loop [[k v] :pairs a :when subst]
+            (set subst
+              (cond
+                (b k)
+                  (unify2 v (b k) subst)
+                (ib v)
+                  (unify2 k (ib v) subst)
+                nil))))
+          (unify-keys x y iy)
+          (unify-keys y x ix)
+        subst)
     nil))
 
 (defn unify
   [x y &opt subst]
   (default subst {})
   (unify2 x y subst))
+
+(defn lookup-uvar
+  [subst v]
+  (def r (get subst v))
+  (if (nil? r)
+    v
+    (lookup-uvar subst (r 0))))
+
+(defn apply-subst
+  [subst form]
+  (defn f
+    [v]
+    (if (uvar? v)
+      (lookup-uvar subst v)
+      v))
+  (prewalk f form))
+
